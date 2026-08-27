@@ -3,52 +3,132 @@ package com.httpserver.server;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The core HTTP server.
  *
- * Opens a TCP ServerSocket and enters an accept loop: each incoming
- * connection is handed off to a ConnectionHandler.
- *
- * Phase 1: single-threaded — runs the handler directly on the accept thread.
- * Phase 2 will add an ExecutorService thread pool here.
+ * Opens a TCP ServerSocket and uses a fixed thread pool (ExecutorService)
+ * to handle incoming connections concurrently.
  */
 public class HttpServer {
+    private static final int DEFAULT_THREADS = 10;
+    private static final int DEFAULT_IDLE_TIMEOUT_MS = 5000;
+
     private final int port;
+    private final int threadPoolSize;
+    private final int idleTimeoutMs;
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    private ServerSocket serverSocket;
+    private ExecutorService threadPool;
 
     public HttpServer(int port) {
+        this(port, DEFAULT_THREADS, DEFAULT_IDLE_TIMEOUT_MS);
+    }
+
+    public HttpServer(int port, int threadPoolSize) {
+        this(port, threadPoolSize, DEFAULT_IDLE_TIMEOUT_MS);
+    }
+
+    public HttpServer(int port, int threadPoolSize, int idleTimeoutMs) {
         this.port = port;
+        this.threadPoolSize = threadPoolSize;
+        this.idleTimeoutMs = idleTimeoutMs;
     }
 
     /**
-     * Start the server. This method blocks forever (accept loop).
-     *
-     * How the accept loop works:
-     *   1. ServerSocket.accept() blocks until a client connects
-     *   2. accept() returns a Socket representing that TCP connection
-     *   3. We wrap the Socket in a ConnectionHandler and run it
-     *   4. After the handler finishes, we go back to step 1
-     *
-     * Note: In Phase 1, step 3 runs synchronously on this thread,
-     * meaning only ONE client can be served at a time. We fix this
-     * in Phase 2 with a thread pool.
+     * Start the server and enter the accept loop.
      */
     public void start() throws IOException {
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Server started on port " + port);
+        running.set(true);
+
+        // Custom ThreadFactory to give worker threads meaningful names for logging/debugging
+        ThreadFactory threadFactory = new ThreadFactory() {
+            private final AtomicInteger counter = new AtomicInteger(1);
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread thread = new Thread(r, "http-worker-" + counter.getAndIncrement());
+                thread.setDaemon(false);
+                return thread;
+            }
+        };
+
+        threadPool = Executors.newFixedThreadPool(threadPoolSize, threadFactory);
+
+        // Register JVM shutdown hook for graceful termination (e.g. on Ctrl+C / SIGINT)
+        Thread shutdownHook = new Thread(this::stop, "shutdown-hook");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+
+        try (ServerSocket ss = new ServerSocket(port)) {
+            this.serverSocket = ss;
+            System.out.println("Server started on port " + port
+                    + " with " + threadPoolSize + " worker threads (idle timeout: " + idleTimeoutMs + "ms)");
             System.out.println("Try: curl -v http://localhost:" + port + "/");
 
-            while (true) {
-                // Block until a client connects
-                Socket clientSocket = serverSocket.accept();
-                System.out.println("Connection from: "
-                        + clientSocket.getInetAddress().getHostAddress()
-                        + ":" + clientSocket.getPort());
+            while (running.get()) {
+                try {
+                    // Block until a client connects
+                    Socket clientSocket = serverSocket.accept();
+                    System.out.println("[" + Thread.currentThread().getName() + "] Accepted connection from: "
+                            + clientSocket.getRemoteSocketAddress());
 
-                // Handle the connection (synchronously for now)
-                ConnectionHandler handler = new ConnectionHandler(clientSocket);
-                handler.run();
+                    // Submit connection handling to the worker thread pool
+                    threadPool.submit(new ConnectionHandler(clientSocket, idleTimeoutMs));
+                } catch (SocketException e) {
+                    if (!running.get()) {
+                        // Expected when serverSocket.close() is called during shutdown
+                        break;
+                    }
+                    System.err.println("Socket error during accept: " + e.getMessage());
+                }
             }
+        } finally {
+            stop();
         }
+    }
+
+    /**
+     * Gracefully stop the server and shut down the thread pool.
+     */
+    public void stop() {
+        if (running.compareAndSet(true, false)) {
+            System.out.println("Stopping HTTP server...");
+
+            // 1. Close ServerSocket to stop accepting new connections
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                try {
+                    serverSocket.close();
+                } catch (IOException e) {
+                    System.err.println("Error closing server socket: " + e.getMessage());
+                }
+            }
+
+            // 2. Shut down thread pool gracefully
+            if (threadPool != null && !threadPool.isShutdown()) {
+                threadPool.shutdown();
+                try {
+                    if (!threadPool.awaitTermination(5, TimeUnit.SECONDS)) {
+                        System.out.println("Forcing thread pool shutdown...");
+                        threadPool.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    threadPool.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            System.out.println("Server stopped cleanly.");
+        }
+    }
+
+    public boolean isRunning() {
+        return running.get();
     }
 }
