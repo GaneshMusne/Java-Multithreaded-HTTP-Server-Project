@@ -1,0 +1,7 @@
+{
+  "message": "Hello from Multithreaded HTTP Server!",
+  "status": "running",
+  "version": "1.0.0",
+  "runtime": "Java 17+",
+  "architecture": "Thread Pool + Non-blocking I/O concepts with raw TCP sockets"
+}

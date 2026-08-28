@@ -3,7 +3,7 @@ package com.httpserver.server;
 import com.httpserver.http.HttpParser;
 import com.httpserver.http.HttpRequest;
 import com.httpserver.http.HttpResponse;
-import com.httpserver.http.HttpStatus;
+import com.httpserver.routing.Router;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -15,26 +15,24 @@ import java.net.SocketTimeoutException;
 /**
  * Handles a single TCP connection over its entire lifecycle.
  *
- * Supports HTTP/1.1 persistent connections (keep-alive) by looping to read
- * multiple requests on the same socket until:
- *   - The client sends Connection: close (or HTTP/1.0 without keep-alive)
- *   - The client closes the connection (EOF)
- *   - An idle read timeout occurs (SocketTimeoutException)
- *   - An I/O error occurs
+ * Dispatches parsed HTTP requests to a Router while maintaining HTTP/1.1
+ * persistent connection (keep-alive) and idle timeout semantics.
  */
 public class ConnectionHandler implements Runnable {
     private static final int DEFAULT_IDLE_TIMEOUT_MS = 5000;
 
     private final Socket socket;
     private final int idleTimeoutMs;
+    private final Router router;
 
-    public ConnectionHandler(Socket socket) {
-        this(socket, DEFAULT_IDLE_TIMEOUT_MS);
+    public ConnectionHandler(Socket socket, Router router) {
+        this(socket, DEFAULT_IDLE_TIMEOUT_MS, router);
     }
 
-    public ConnectionHandler(Socket socket, int idleTimeoutMs) {
+    public ConnectionHandler(Socket socket, int idleTimeoutMs, Router router) {
         this.socket = socket;
         this.idleTimeoutMs = idleTimeoutMs;
+        this.router = router;
     }
 
     @Override
@@ -78,12 +76,11 @@ public class ConnectionHandler implements Runnable {
                 // Determine if we should maintain persistent connection
                 keepAlive = shouldKeepAlive(request);
 
-                // Build and send response
-                HttpResponse response = new HttpResponse()
-                        .status(HttpStatus.OK)
-                        .header("Content-Type", "text/plain")
-                        .header("Connection", keepAlive ? "keep-alive" : "close")
-                        .body("Hello, World!\n");
+                // Route the request to the appropriate handler
+                HttpResponse response = router.route(request);
+
+                // Ensure connection header reflects current keep-alive state
+                response.header("Connection", keepAlive ? "keep-alive" : "close");
 
                 response.writeTo(out);
 

@@ -1,5 +1,10 @@
 package com.httpserver.server;
 
+import com.httpserver.handler.EchoHandler;
+import com.httpserver.handler.StaticFileHandler;
+import com.httpserver.http.HttpMethod;
+import com.httpserver.routing.Router;
+
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -15,7 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The core HTTP server.
  *
  * Opens a TCP ServerSocket and uses a fixed thread pool (ExecutorService)
- * to handle incoming connections concurrently.
+ * to handle incoming connections concurrently, dispatching requests through
+ * a Router.
  */
 public class HttpServer {
     private static final int DEFAULT_THREADS = 10;
@@ -24,23 +30,29 @@ public class HttpServer {
     private final int port;
     private final int threadPoolSize;
     private final int idleTimeoutMs;
+    private final Router router;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private ServerSocket serverSocket;
     private ExecutorService threadPool;
 
     public HttpServer(int port) {
-        this(port, DEFAULT_THREADS, DEFAULT_IDLE_TIMEOUT_MS);
+        this(port, DEFAULT_THREADS, DEFAULT_IDLE_TIMEOUT_MS, createDefaultRouter());
     }
 
     public HttpServer(int port, int threadPoolSize) {
-        this(port, threadPoolSize, DEFAULT_IDLE_TIMEOUT_MS);
+        this(port, threadPoolSize, DEFAULT_IDLE_TIMEOUT_MS, createDefaultRouter());
     }
 
     public HttpServer(int port, int threadPoolSize, int idleTimeoutMs) {
+        this(port, threadPoolSize, idleTimeoutMs, createDefaultRouter());
+    }
+
+    public HttpServer(int port, int threadPoolSize, int idleTimeoutMs, Router router) {
         this.port = port;
         this.threadPoolSize = threadPoolSize;
         this.idleTimeoutMs = idleTimeoutMs;
+        this.router = router != null ? router : createDefaultRouter();
     }
 
     /**
@@ -70,6 +82,8 @@ public class HttpServer {
             this.serverSocket = ss;
             System.out.println("Server started on port " + port
                     + " with " + threadPoolSize + " worker threads (idle timeout: " + idleTimeoutMs + "ms)");
+            System.out.println("Static files served from: " + (router.getStaticFileHandler() != null
+                    ? router.getStaticFileHandler().getBaseDirectory() : "none"));
             System.out.println("Try: curl -v http://localhost:" + port + "/");
 
             while (running.get()) {
@@ -80,7 +94,7 @@ public class HttpServer {
                             + clientSocket.getRemoteSocketAddress());
 
                     // Submit connection handling to the worker thread pool
-                    threadPool.submit(new ConnectionHandler(clientSocket, idleTimeoutMs));
+                    threadPool.submit(new ConnectionHandler(clientSocket, idleTimeoutMs, router));
                 } catch (SocketException e) {
                     if (!running.get()) {
                         // Expected when serverSocket.close() is called during shutdown
@@ -130,5 +144,24 @@ public class HttpServer {
 
     public boolean isRunning() {
         return running.get();
+    }
+
+    public Router getRouter() {
+        return router;
+    }
+
+    /**
+     * Creates a default router with static file serving from public/
+     * and built-in echo endpoints.
+     */
+    public static Router createDefaultRouter() {
+        Router router = new Router();
+        router.setStaticFileHandler(new StaticFileHandler("public"));
+
+        EchoHandler echoHandler = new EchoHandler();
+        router.addRoute(HttpMethod.POST, "/echo", echoHandler);
+        router.addRoute(HttpMethod.GET, "/echo", echoHandler);
+
+        return router;
     }
 }

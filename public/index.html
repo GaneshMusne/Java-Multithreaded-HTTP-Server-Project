@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multithreaded HTTP Server</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ Multithreaded Java HTTP Server</h1>
+            <p class="subtitle">Built completely from scratch using raw TCP Sockets & Concurrency primitives</p>
+        </header>
+
+        <section class="card">
+            <h2>Features Implemented</h2>
+            <ul>
+                <li><strong>Raw TCP Sockets</strong> — <code>ServerSocket</code> & <code>Socket</code> (no Netty/Spring)</li>
+                <li><strong>RFC 7230 Parser</strong> — Custom stream parser for request-line, headers & body</li>
+                <li><strong>Concurrency</strong> — Thread pool execution with configurable worker threads</li>
+                <li><strong>Persistent Connections</strong> — HTTP/1.1 Keep-Alive with idle read timeouts</li>
+                <li><strong>Routing Engine</strong> — Method + path dispatch, 404 Not Found, 405 Method Not Allowed</li>
+                <li><strong>Static File Serving</strong> — MIME type resolution with directory traversal protection</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <h2>Try Sample Endpoints</h2>
+            <div class="links">
+                <a class="btn" href="/hello.json" target="_blank">📄 View hello.json</a>
+                <a class="btn" href="/style.css" target="_blank">🎨 View style.css</a>
+            </div>
+        </section>
+
+        <footer>
+            <p>Portfolio Project | Java 17+ | Raw TCP Sockets</p>
+        </footer>
+    </div>
+</body>
+</html>

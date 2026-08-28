@@ -14,6 +14,7 @@ public enum HttpStatus {
 
     // 4xx Client Errors
     BAD_REQUEST(400, "Bad Request"),
+    FORBIDDEN(403, "Forbidden"),
     NOT_FOUND(404, "Not Found"),
     METHOD_NOT_ALLOWED(405, "Method Not Allowed"),
     REQUEST_TIMEOUT(408, "Request Timeout"),
