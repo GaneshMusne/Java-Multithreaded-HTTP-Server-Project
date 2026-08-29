@@ -1,8 +1,12 @@
 package com.httpserver.server;
 
+import com.httpserver.http.BadRequestException;
+import com.httpserver.http.HttpMethod;
 import com.httpserver.http.HttpParser;
 import com.httpserver.http.HttpRequest;
 import com.httpserver.http.HttpResponse;
+import com.httpserver.http.HttpStatus;
+import com.httpserver.logging.AccessLogger;
 import com.httpserver.routing.Router;
 
 import java.io.BufferedInputStream;
@@ -15,8 +19,9 @@ import java.net.SocketTimeoutException;
 /**
  * Handles a single TCP connection over its entire lifecycle.
  *
- * Dispatches parsed HTTP requests to a Router while maintaining HTTP/1.1
- * persistent connection (keep-alive) and idle timeout semantics.
+ * Implements persistent HTTP/1.1 connections, reads requests, delegates to Router,
+ * handles malformed requests with 400 Bad Request, catches server errors with 500,
+ * and records access logs with latency.
  */
 public class ConnectionHandler implements Runnable {
     private static final int DEFAULT_IDLE_TIMEOUT_MS = 5000;
@@ -38,11 +43,8 @@ public class ConnectionHandler implements Runnable {
     @Override
     public void run() {
         try (socket) {
-            // Set socket read timeout so idle clients don't occupy a worker thread forever
             socket.setSoTimeout(idleTimeoutMs);
 
-            // Wrap the raw InputStream ONCE for the connection's lifetime.
-            // If we wrapped it per-request, BufferedInputStream would discard prefetched bytes.
             BufferedInputStream in = new BufferedInputStream(socket.getInputStream());
             OutputStream out = socket.getOutputStream();
 
@@ -50,49 +52,79 @@ public class ConnectionHandler implements Runnable {
             int requestCount = 0;
 
             while (keepAlive && !socket.isClosed()) {
-                HttpRequest request;
+                long startTime = System.nanoTime();
+                HttpRequest request = null;
+                HttpResponse response = null;
+                HttpMethod method = null;
+                String path = null;
+
                 try {
                     request = HttpParser.parse(in);
-                } catch (SocketTimeoutException e) {
-                    if (requestCount > 0) {
-                        System.out.println("[" + Thread.currentThread().getName()
-                                + "] Keep-alive connection idle timeout (" + idleTimeoutMs + "ms) reached. Closing socket.");
-                    } else {
-                        System.out.println("[" + Thread.currentThread().getName()
-                                + "] Read timeout before receiving request. Closing socket.");
+
+                    if (request == null) {
+                        // Client closed connection cleanly (EOF)
+                        break;
                     }
+
+                    requestCount++;
+                    method = request.getMethod();
+                    path = request.getPath();
+                    keepAlive = shouldKeepAlive(request);
+
+                    // Route request to handler
+                    response = router.route(request);
+
+                } catch (SocketTimeoutException e) {
+                    // Timeout while waiting for next request (keep-alive idle timeout)
+                    // or client stalled mid-request. Break and close socket cleanly.
                     break;
+                } catch (BadRequestException e) {
+                    // Protocol / syntax violation -> 400 Bad Request
+                    HttpStatus status = e.getStatus() != null ? e.getStatus() : HttpStatus.BAD_REQUEST;
+                    keepAlive = false; // Always close connection on framing/parsing failure
+
+                    response = new HttpResponse()
+                            .status(status)
+                            .header("Content-Type", "text/plain; charset=utf-8")
+                            .body(status.getCode() + " " + status.getReasonPhrase() + ": " + e.getMessage() + "\n");
+                } catch (Throwable t) {
+                    // Uncaught server error -> 500 Internal Server Error
+                    keepAlive = false;
+
+                    response = new HttpResponse()
+                            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .header("Content-Type", "text/plain; charset=utf-8")
+                            .body("500 Internal Server Error: " + t.getMessage() + "\n");
                 }
 
-                if (request == null) {
-                    // Client closed connection cleanly (EOF)
-                    break;
+                if (response != null) {
+                    response.header("Connection", keepAlive ? "keep-alive" : "close");
+
+                    try {
+                        response.writeTo(out);
+                    } catch (IOException ioException) {
+                        // Connection reset or closed while writing response
+                        break;
+                    }
+
+                    long durationNanos = System.nanoTime() - startTime;
+                    AccessLogger.log(
+                            Thread.currentThread().getName(),
+                            method,
+                            path,
+                            response.getStatus(),
+                            durationNanos
+                    );
                 }
-
-                requestCount++;
-                System.out.println("[" + Thread.currentThread().getName() + "] Request #" + requestCount
-                        + ": " + request);
-
-                // Determine if we should maintain persistent connection
-                keepAlive = shouldKeepAlive(request);
-
-                // Route the request to the appropriate handler
-                HttpResponse response = router.route(request);
-
-                // Ensure connection header reflects current keep-alive state
-                response.header("Connection", keepAlive ? "keep-alive" : "close");
-
-                response.writeTo(out);
 
                 if (!keepAlive) {
                     break;
                 }
             }
         } catch (SocketException e) {
-            // Client abruptly disconnected (e.g. connection reset by peer)
-            System.out.println("[" + Thread.currentThread().getName() + "] Connection reset/closed: " + e.getMessage());
+            // Connection reset by peer or closed abnormally
         } catch (IOException e) {
-            System.err.println("[" + Thread.currentThread().getName() + "] Error handling connection: " + e.getMessage());
+            System.err.println("[" + Thread.currentThread().getName() + "] I/O error: " + e.getMessage());
         }
     }
 
