@@ -35,10 +35,6 @@ public class Router {
         return addRoute(HttpMethod.GET, path, handler);
     }
 
-    public Router post(String path, RequestHandler handler) {
-        return addRoute(HttpMethod.POST, path, handler);
-    }
-
     public Router setStaticFileHandler(StaticFileHandler staticFileHandler) {
         this.staticFileHandler = staticFileHandler;
         return this;

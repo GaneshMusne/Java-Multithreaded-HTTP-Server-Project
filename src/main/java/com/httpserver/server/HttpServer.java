@@ -142,13 +142,6 @@ public class HttpServer {
         }
     }
 
-    public boolean isRunning() {
-        return running.get();
-    }
-
-    public Router getRouter() {
-        return router;
-    }
 
     /**
      * Creates a default router with static file serving from public/
