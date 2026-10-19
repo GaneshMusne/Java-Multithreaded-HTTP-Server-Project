@@ -49,7 +49,6 @@ public class ConnectionHandler implements Runnable {
             OutputStream out = socket.getOutputStream();
 
             boolean keepAlive = true;
-            int requestCount = 0;
 
             while (keepAlive && !socket.isClosed()) {
                 long startTime = System.nanoTime();
@@ -65,8 +64,6 @@ public class ConnectionHandler implements Runnable {
                         // Client closed connection cleanly (EOF)
                         break;
                     }
-
-                    requestCount++;
                     method = request.getMethod();
                     path = request.getPath();
                     keepAlive = shouldKeepAlive(request);
